@@ -6,12 +6,15 @@ tests, CodeQL, release automation). These aren't derivable from the code alone.
 ## What this plugin actually is, and why that bounds everything else
 
 This plugin exists only because Keycloak **< 20.0.0** mishandles ELSTER's custom SAML attribute
-types (`ekona:*`); the bug was fixed upstream in 20.0.0 (see README). It deploys via the
-**legacy WildFly distribution** (`wildfly-maven-plugin`, `standalone/deployments`,
+types (`ekona:*`); the bug was fixed upstream in 20.0.0 (see README). It originally deployed only
+via the **legacy WildFly distribution** (`wildfly-maven-plugin`, `standalone/deployments`,
 `jboss-deployment-structure.xml`), which Keycloak deprecated in 17 and removed entirely in 21.
-So any meaningful "test against multiple Keycloak versions" work is bounded to roughly the 15–19
-range — testing against current Keycloak (24+, Quarkus distribution) tests nothing this plugin
-does.
+**As of the Jakarta/Quarkus migration below, it now also supports current Keycloak** (Quarkus
+distribution, `providers/` dir), built via a separate Maven profile — see "Supporting both old
+and current Keycloak" for how that's structured. The `replaceUnknownType`/flattening logic still
+has value on current Keycloak even though the original parsing bug is fixed there: it's the thing
+that turns nested ELSTER attributes (e.g. address) into separate flat user attributes, which
+upstream Keycloak has no reason to replicate.
 
 ## Keycloak legacy-distribution version matrix gotchas
 
@@ -75,6 +78,72 @@ wired up but will fail at the publish step until someone provisions:
   `OSS_SONATYPE_GPG_PASSPHRASE`.
 
 It's manual-dispatch only, so this doesn't block normal CI.
+
+## Supporting both old and current Keycloak: the Jakarta/Quarkus migration
+
+The source **doesn't compile past Keycloak 20.0.5** as originally written. Bisected precisely
+against `org.keycloak:keycloak-core` on Maven Central: 20.0.5 compiles, 21.1.2 breaks
+(`SAMLEndpoint`'s constructor changed from `RealmModel` to `KeycloakSession` as its first param;
+`XMLEncryptionUtil`/`AssertionUtil` decrypt methods changed from raw `PrivateKey` to a
+`DecryptionKeyLocator` functional interface), and 22.0.5+ additionally breaks because Keycloak's
+Jakarta EE 10 migration renamed `javax.ws.rs.*` → `jakarta.ws.rs.*`. Diffed against
+`keycloak/keycloak` on GitHub at tag `26.7.1` (`services/.../broker/saml/SAMLEndpoint.java`,
+`saml-core/.../util/XMLEncryptionUtil.java`, `AssertionUtil.java`) to find the exact deltas.
+
+**A single Java source file can't import both `javax.ws.rs` and `jakarta.ws.rs`.** Since a
+mechanical, single-tree upgrade wasn't possible, and the plugin needs to keep working on
+pre-20 Keycloak (the whole reason it exists), the fix is dual source roots behind a Maven
+profile pair, chosen at build time:
+
+- `src/main/java-legacy/` — the original javax-based code, targeting Keycloak ≤ ~20 (WildFly).
+- `src/main/java-jakarta/` — the ported jakarta-based code, targeting current Keycloak (Quarkus).
+- `src/main/java/` — `ElsterIdentityProviderFactory.java` and `ElsterUserAttributeMapper.java`
+  stay here, shared and unmodified; verified they compile unchanged at every version 15.1.1
+  through 26.7.1.
+
+Selected via `-Plegacy` (default, `activeByDefault=true`) or `-Pjakarta`, using
+`build-helper-maven-plugin`'s `add-source` goal — an explicit `-P` on the command line
+automatically deactivates the `activeByDefault` profile, so the two are mutually exclusive
+without extra wiring.
+
+**Only two files needed forking**: `CustomSAMLEndpoint.java` and `ElsterIdentityProvider.java`.
+Everything else was unaffected — confirmed by compiling against 26.7.1 and checking which files
+actually errored (only `CustomSAMLEndpoint.java`, even though `ElsterIdentityProvider.java`
+*calls* the now-incompatible constructor — Java only flags the file whose own body breaks, not
+every caller of a still-syntactically-valid method signature).
+
+Exact port, in case this needs redoing for a future API break:
+
+- `XMLEncryptionUtil.DecryptionKeyLocator` is trivial (`List<PrivateKey> getKeys(EncryptedData)`)
+  — wrap the existing `PrivateKey` as `encryptedData -> Collections.singletonList(privateKey)`.
+- Current `AssertionUtil.decryptAssertion(ResponseType, DecryptionKeyLocator)` internally is
+  almost exactly what this plugin's forked `decryptAssertion` already does — same
+  decrypt-into-temp-`Document` → `SAMLParser.parse` → `responseType.replaceAssertion(...)` shape,
+  just with `replaceUnknownType(...)` spliced in before the parse, same as before.
+- **Dropped** the manual "EncryptedID → BaseID" block from `handleLoginResponse` in the jakarta
+  variant: current `SAMLEndpoint.handleLoginResponse` already calls `AssertionUtil.decryptId(...)`
+  internally, so the plugin's old workaround is now redundant (and would only be a silent no-op
+  if kept, since it null-checks before acting — but simpler to just remove it).
+- **Kept** the `config.setWantAssertionsEncrypted(false)` / restore trick around
+  `super.handleLoginResponse(...)` — still required, still works the same way (same guard clause
+  in current code: `if (config.isWantAssertionsEncrypted() && !assertionIsEncrypted)` → error
+  page, and our pre-decryption still flips `assertionIsEncrypted` to `false` before super runs).
+- `postBinding()` needed an added `samlArt` `@FormParam` and a 5th arg to `execute(...)` — the
+  base class's own `postBinding()` signature grew an artifact-binding parameter upstream.
+- `ElsterIdentityProvider.callback(RealmModel realm, AuthenticationCallback callback, EventBuilder event)`
+  keeps the exact same signature in current Keycloak, but its body must pass the inherited
+  `session` field (from `AbstractIdentityProvider`, present in both API generations) instead of
+  the `realm` parameter, since jakarta's `CustomSAMLEndpoint` constructor takes `KeycloakSession`
+  first. That's the one line that forces this file to be forked too.
+- `replaceUnknownType` and all its private helpers are copied byte-for-byte between variants —
+  they only touch `org.w3c.dom`/`javax.xml.xpath` (JDK standard library, unrelated to the
+  Jakarta EE rename).
+
+Current Quarkus-based Keycloak deploys providers completely differently from WildFly: copy the
+jar into `/opt/keycloak/providers/` and run `/opt/keycloak/bin/kc.sh build` (which instantiates
+providers and fails the build outright if one is broken — a stronger CI signal than the legacy
+job's log-polling), then run with `start-dev`. No `/auth` path prefix. See the `end2end-quarkus`
+job in `.github/workflows/build.yml`.
 
 ## Test strategy
 
