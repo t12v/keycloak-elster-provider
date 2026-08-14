@@ -71,22 +71,28 @@ jobs:
             -Darguments="-DskipTests=true -Dmaven.deploy.skip=true"
 
       # release:perform already built the legacy jar into target/checkout/target - grab it now,
-      # before the jakarta build below cleans that same directory.
+      # before the jakarta builds below clean that same directory.
       - name: Collect legacy (WildFly) SPI jar
         run: cp target/checkout/target/elster-authenticator-${{ inputs.releaseversion }}.jar elster-authenticator-${{ inputs.releaseversion }}.jar
 
-      # release:perform only builds/publishes one artifact per invocation, and the legacy
-      # (javax/WildFly) and jakarta (Quarkus) SPI variants can't be compiled together - see
-      # CLAUDE.md. The legacy jar above is the published-to-Central primary artifact; this
-      # second pass builds the jakarta jar (classifier "jakarta", see pom.xml) from the same
-      # tagged checkout release:perform already produced, as a GitHub release asset only - not
-      # published to Central to avoid two publishes fighting over the same GAV/version. `clean`
-      # is safe here since the legacy jar was already collected above.
-      - name: Build and collect jakarta (Quarkus) SPI jar
+      # release:perform only builds/publishes one artifact per invocation, and the three SPI
+      # variants (legacy/jakarta/jakarta-current) can't be compiled together - see CLAUDE.md and
+      # pom.xml for the exact Keycloak API generations each one targets. The legacy jar above is
+      # the published-to-Central primary artifact; these are GitHub release assets only, built
+      # from the same tagged checkout release:perform already produced (`clean` is safe since
+      # each prior jar was already collected before the next build). Keep the Keycloak versions
+      # here in sync with the keycloak-version-matrix pins in build.yml.
+      - name: Build and collect jakarta (Keycloak 22.0.5-25.x) SPI jar
         run: |
           cd target/checkout
-          mvn -B -ntp -Pjakarta -Dkeycloak.version=26.7.1 clean package -DskipTests
+          mvn -B -ntp -Pjakarta -Dkeycloak.version=25.0.6 clean package -DskipTests
           cp target/elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar ../../elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar
+
+      - name: Build and collect jakarta-current (Keycloak >= 26.5.0) SPI jar
+        run: |
+          cd target/checkout
+          mvn -B -ntp -Pjakarta-current -Dkeycloak.version=26.7.1 clean package -DskipTests
+          cp target/elster-authenticator-${{ inputs.releaseversion }}-jakarta-current.jar ../../elster-authenticator-${{ inputs.releaseversion }}-jakarta-current.jar
 
       - name: Generate Changelog
         uses: orhun/git-cliff-action@v4
@@ -114,3 +120,4 @@ jobs:
           files: |
             elster-authenticator-${{ inputs.releaseversion }}.jar
             elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar
+            elster-authenticator-${{ inputs.releaseversion }}-jakarta-current.jar

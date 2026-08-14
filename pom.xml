@@ -158,13 +158,17 @@
 
     <profiles>
         <!--
-            Keycloak's Jakarta EE 10 migration (22.0.0+) renamed javax.ws.rs -> jakarta.ws.rs and
-            changed several broker SPI signatures a single source file can't support both of at
-            once. CustomSAMLEndpoint.java and ElsterIdentityProvider.java are forked per API
-            generation into src/main/java-legacy (javax, Keycloak <= ~20, WildFly distribution)
-            and src/main/java-jakarta (jakarta, Keycloak >= 22, Quarkus distribution) - everything
-            else stays in src/main/java and compiles either way. Pick one explicitly: -Plegacy or
-            -Pjakarta (an explicit -P deactivates the activeByDefault one automatically).
+            Keycloak's broker SAML SPI has moved more than once since the javax.ws.rs ->
+            jakarta.ws.rs rename (22.0.0), and a single source file can't satisfy every shape at
+            once (see CLAUDE.md for the exact API diffs). CustomSAMLEndpoint.java and
+            ElsterIdentityProvider.java are forked per API generation:
+              - src/main/java-legacy           javax.ws.rs, Keycloak <= 20.0.5, WildFly distribution
+              - src/main/java-jakarta          jakarta.ws.rs, Keycloak 22.0.5-25.x (Quarkus)
+              - src/main/java-jakarta-current  jakarta.ws.rs, Keycloak >= 26.5.0 (Quarkus)
+            Everything else stays in src/main/java and compiles under any of them. Note: Keycloak
+            21.x and 26.0.0-26.4.x fall between these and aren't covered by any variant - not
+            currently in the CI matrix. Pick a profile explicitly: -Plegacy, -Pjakarta, or
+            -Pjakarta-current (an explicit -P deactivates the activeByDefault one automatically).
         -->
         <profile>
             <id>legacy</id>
@@ -229,6 +233,40 @@
                         <version>3.4.2</version>
                         <configuration>
                             <classifier>jakarta</classifier>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>jakarta-current</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-jakarta-current-source</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/main/java-jakarta-current</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>3.4.2</version>
+                        <configuration>
+                            <classifier>jakarta-current</classifier>
                         </configuration>
                     </plugin>
                 </plugins>
