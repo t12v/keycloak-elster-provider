@@ -218,6 +218,19 @@
                             </execution>
                         </executions>
                     </plugin>
+                    <!--
+                        Classifier so the jakarta jar can't collide with the legacy one when both
+                        get built from the same tag during a release (see release.yml) - legacy
+                        stays the unclassified primary artifact for backwards compatibility.
+                    -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>3.4.2</version>
+                        <configuration>
+                            <classifier>jakarta</classifier>
+                        </configuration>
+                    </plugin>
                 </plugins>
             </build>
         </profile>

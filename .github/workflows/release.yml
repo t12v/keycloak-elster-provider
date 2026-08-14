@@ -70,6 +70,24 @@ jobs:
             -DreleaseVersion=${{ inputs.releaseversion }} \
             -Darguments="-DskipTests=true -Dmaven.deploy.skip=true"
 
+      # release:perform already built the legacy jar into target/checkout/target - grab it now,
+      # before the jakarta build below cleans that same directory.
+      - name: Collect legacy (WildFly) SPI jar
+        run: cp target/checkout/target/elster-authenticator-${{ inputs.releaseversion }}.jar elster-authenticator-${{ inputs.releaseversion }}.jar
+
+      # release:perform only builds/publishes one artifact per invocation, and the legacy
+      # (javax/WildFly) and jakarta (Quarkus) SPI variants can't be compiled together - see
+      # CLAUDE.md. The legacy jar above is the published-to-Central primary artifact; this
+      # second pass builds the jakarta jar (classifier "jakarta", see pom.xml) from the same
+      # tagged checkout release:perform already produced, as a GitHub release asset only - not
+      # published to Central to avoid two publishes fighting over the same GAV/version. `clean`
+      # is safe here since the legacy jar was already collected above.
+      - name: Build and collect jakarta (Quarkus) SPI jar
+        run: |
+          cd target/checkout
+          mvn -B -ntp -Pjakarta -Dkeycloak.version=26.7.1 clean package -DskipTests
+          cp target/elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar ../../elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar
+
       - name: Generate Changelog
         uses: orhun/git-cliff-action@v4
         with:
@@ -84,9 +102,6 @@ jobs:
           git diff --staged --quiet || git commit -m "chore(release): update changelog for v${{ inputs.releaseversion }}"
           git push
 
-      - name: Prepare release artifact
-        run: cp target/checkout/target/elster-authenticator-${{ inputs.releaseversion }}.jar elster-authenticator-${{ inputs.releaseversion }}.jar
-
       - name: Create GH release
         uses: softprops/action-gh-release@v3
         env:
@@ -98,3 +113,4 @@ jobs:
           draft: true
           files: |
             elster-authenticator-${{ inputs.releaseversion }}.jar
+            elster-authenticator-${{ inputs.releaseversion }}-jakarta.jar
