@@ -1,0 +1,92 @@
+name: Create release
+run-name: ${{ inputs.releaseversion }}
+on:
+  workflow_dispatch:
+    inputs:
+      releaseversion:
+        description: "Release version"
+        required: true
+        type: string
+        default: "X.Y.Z"
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git author
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "maven"
+
+      # Requires repo secrets OSS_SONATYPE_USER / OSS_SONATYPE_PASS (Central Publishing Portal
+      # credentials for the de.muenchen.keycloak namespace) - see plan for prerequisites.
+      - name: Setup settings.xml
+        uses: s4u/maven-settings-action@v4.0.0
+        with:
+          override: true
+          servers: |
+            [{
+                "id": "central",
+                "username": "${{ secrets.OSS_SONATYPE_USER }}",
+                "password": "${{ secrets.OSS_SONATYPE_PASS }}"
+            }]
+
+      # Requires repo secrets OSS_SONATYPE_GPG_PRIVATE_KEY / OSS_SONATYPE_GPG_PASSPHRASE.
+      - name: Install gpg secret key
+        run: |
+          cat <(echo -e "${{ secrets.OSS_SONATYPE_GPG_PRIVATE_KEY }}") | gpg --batch --import
+          gpg --list-secret-keys --keyid-format LONG
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export TZ="Europe/Berlin"
+          mvn -B -ntp release:prepare release:perform \
+            -DreleaseVersion=${{ inputs.releaseversion }} \
+            -Darguments="-DskipTests=true -Pcentral-publish -Dgpg.passphrase=${{ secrets.OSS_SONATYPE_GPG_PASSPHRASE }}"
+
+      - name: Generate Changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag v${{ inputs.releaseversion }} --prepend CHANGELOG.md --unreleased
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit Changelog
+        run: |
+          git add CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore(release): update changelog for v${{ inputs.releaseversion }}"
+          git push
+
+      - name: Prepare release artifact
+        run: cp target/checkout/target/elster-authenticator-${{ inputs.releaseversion }}.jar elster-authenticator-${{ inputs.releaseversion }}.jar
+
+      - name: Create GH release
+        uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ inputs.releaseversion }}
+          tag_name: elster-authenticator-${{ inputs.releaseversion }}
+          draft: true
+          files: |
+            elster-authenticator-${{ inputs.releaseversion }}.jar
