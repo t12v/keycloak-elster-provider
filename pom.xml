@@ -23,7 +23,7 @@
 
     <groupId>de.muenchen.keycloak</groupId>
     <artifactId>elster-authenticator</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <licenses>
@@ -57,7 +57,7 @@
         <connection>scm:git:https://github.com/t12v/keycloak-elster-provider.git</connection>
         <developerConnection>scm:git:https://github.com/t12v/keycloak-elster-provider.git</developerConnection>
         <url>https://github.com/t12v/keycloak-elster-provider</url>
-        <tag>elster-authenticator-0.1.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
 
