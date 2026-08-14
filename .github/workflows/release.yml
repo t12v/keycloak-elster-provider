@@ -47,12 +47,6 @@ jobs:
                 "password": "${{ secrets.OSS_SONATYPE_PASS }}"
             }]
 
-      # Requires repo secrets OSS_SONATYPE_GPG_PRIVATE_KEY / OSS_SONATYPE_GPG_PASSPHRASE.
-      - name: Install gpg secret key
-        run: |
-          cat <(echo -e "${{ secrets.OSS_SONATYPE_GPG_PRIVATE_KEY }}") | gpg --batch --import
-          gpg --list-secret-keys --keyid-format LONG
-
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -60,7 +54,7 @@ jobs:
           export TZ="Europe/Berlin"
           mvn -B -ntp release:prepare release:perform \
             -DreleaseVersion=${{ inputs.releaseversion }} \
-            -Darguments="-DskipTests=true -Pcentral-publish -Dgpg.passphrase=${{ secrets.OSS_SONATYPE_GPG_PASSPHRASE }}"
+            -Darguments="-DskipTests=true -Dmaven.deploy.skip=true
 
       - name: Generate Changelog
         uses: orhun/git-cliff-action@v4
