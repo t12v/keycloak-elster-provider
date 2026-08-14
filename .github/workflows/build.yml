@@ -1,325 +1,347 @@
 name: CI
 
 env:
-    # https://github.com/actions/virtual-environments/issues/1499
-    MAVEN_CLI_OPTS: '-ntp --batch-mode --errors --fail-at-end --show-version -Dmaven.wagon.httpconnectionManager.ttlSeconds=60 -Dmaven.wagon.http.retryHandler.count=3 -Dstyle.color=always'
+  # renovate: datasource=docker depName=quay.io/keycloak/keycloak
+  LATEST_KEYCLOAK_VERSION: 26.7.1
+  # https://github.com/actions/virtual-environments/issues/1499
+  MAVEN_CLI_OPTS: '-ntp --batch-mode --errors --fail-at-end --show-version -Dmaven.wagon.httpconnectionManager.ttlSeconds=60 -Dmaven.wagon.http.retryHandler.count=3 -Dstyle.color=always'
 
 on:
-    # allow to manual run the action
-    workflow_dispatch: { }
-    pull_request: { }
-    merge_group: { }
-    push:
-        branches:
-            - develop
-        tags:
-            - '*'
+  # allow to manual run the action
+  workflow_dispatch: {}
+  pull_request: {}
+  merge_group: {}
+  push:
+    branches:
+      - develop
+    tags:
+      - '*'
 
 permissions:
-    contents: read
-    # For reporting
-    attestations: write
-    checks: write
-    # For Junit Reporting commenting
-    pull-requests: write
+  contents: read
+  # For reporting
+  attestations: write
+  checks: write
+  # For Junit Reporting commenting
+  pull-requests: write
 
 jobs:
-    build:
-        name: Build and Test on JDK ${{ matrix.java }} and ${{ matrix.os }}
-        runs-on: ${{ matrix.os }}
-        strategy:
-            matrix:
-                os:
-                    - "macos-latest"
-                    - "ubuntu-latest"
-                java:
-                    - "17"
-                    - "21"
+  vars:
+    # matrix.include/kcVersion can't reference the top-level `env` context directly
+    # (GitHub Actions doesn't expose `env` inside `jobs.<job_id>.strategy`), so surface
+    # LATEST_KEYCLOAK_VERSION as a job output instead, which matrix expressions can read.
+    name: Resolve shared variables
+    runs-on: ubuntu-latest
+    outputs:
+      latest_keycloak_version: ${{ steps.set.outputs.latest_keycloak_version }}
+    steps:
+      - id: set
+        run: echo "latest_keycloak_version=${LATEST_KEYCLOAK_VERSION}" >> "$GITHUB_OUTPUT"
 
-        steps:
-            -   uses: actions/checkout@v7
-            -   uses: actions/setup-node@v7
-            -   name: Set up JDK ${{ matrix.java }}
-                uses: actions/setup-java@v5
-                with:
-                    distribution: "temurin"
-                    java-version: ${{ matrix.java }}
+  build:
+    name: Build and Test on JDK ${{ matrix.java }} and ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - 'macos-latest'
+          - 'ubuntu-latest'
+        java:
+          - '17'
+          - '21'
 
-            -   name: Cache .m2
-                uses: actions/cache@v6
-                with:
-                    path: ~/.m2/repository
-                    key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-                    restore-keys: |
-                        ${{ runner.os }}-maven-
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
 
-            -   name: Build
-                run: |
-                    mvn ${MAVEN_CLI_OPTS} clean verify
+      - name: Cache .m2
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-            -   name: Publish Test Report
-                uses: mikepenz/action-junit-report@v6
-                if: success() || failure()
-                with:
-                    summary: true
-                    detailed_summary: true
-                    annotate_notice: true
-                    truncate_stack_traces: false
-                    report_paths: '**/target/*-reports/TEST-*.xml'
+      - name: Build
+        run: |
+          mvn ${MAVEN_CLI_OPTS} clean verify
 
-    keycloak-version-matrix:
-        name: "Unit tests against Keycloak ${{ matrix.kcVersion }} (${{ matrix.mavenProfile }})"
-        runs-on: ubuntu-latest
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    # Legacy WildFly-distribution range this plugin actually targets: the bug it
-                    # works around was fixed upstream in Keycloak 20.0.0, and Keycloak removed
-                    # the WildFly distribution entirely in 21. 15.1.1 is the current pin; 18.0.2
-                    # and 19.0.3 are later legacy releases still on Maven Central. Built from
-                    # src/main/java-legacy (javax.ws.rs, RealmModel-based SAMLEndpoint ctor).
-                    -   kcVersion: "15.1.1"
-                        mavenProfile: "legacy"
-                    -   kcVersion: "18.0.2"
-                        mavenProfile: "legacy"
-                    -   kcVersion: "19.0.3"
-                        mavenProfile: "legacy"
-                    # Current Keycloak, Quarkus distribution, Jakarta EE 10 (jakarta.ws.rs,
-                    # KeycloakSession-based SAMLEndpoint ctor). Built from src/main/java-jakarta.
-                    -   kcVersion: "26.7.1"
-                        mavenProfile: "jakarta"
-        steps:
-            -   uses: actions/checkout@v7
-            -   name: Set up JDK 17
-                uses: actions/setup-java@v5
-                with:
-                    distribution: "temurin"
-                    java-version: "17"
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v6
+        if: success() || failure()
+        with:
+          summary: true
+          detailed_summary: true
+          annotate_notice: true
+          truncate_stack_traces: false
+          report_paths: '**/target/*-reports/TEST-*.xml'
 
-            -   name: Cache .m2
-                uses: actions/cache@v6
-                with:
-                    path: ~/.m2/repository
-                    key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-                    restore-keys: |
-                        ${{ runner.os }}-maven-
+  keycloak-version-matrix:
+    name: 'Unit tests against Keycloak ${{ matrix.kcVersion }} (${{ matrix.mavenProfile }})'
+    needs: vars
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Legacy WildFly-distribution range this plugin actually targets: the bug it
+          # works around was fixed upstream in Keycloak 20.0.0, and Keycloak removed
+          # the WildFly distribution entirely in 21. 15.1.1 is the current pin; 18.0.2
+          # and 19.0.3 are later legacy releases still on Maven Central. Built from
+          # src/main/java-legacy (javax.ws.rs, RealmModel-based SAMLEndpoint ctor).
+          - kcVersion: '15.1.1'
+            mavenProfile: 'legacy'
+          - kcVersion: '18.0.2'
+            mavenProfile: 'legacy'
+          - kcVersion: '19.0.3'
+            mavenProfile: 'legacy'
 
-            -   name: Build and test against Keycloak ${{ matrix.kcVersion }}
-                run: |
-                    mvn ${MAVEN_CLI_OPTS} -P${{ matrix.mavenProfile }} -Dkeycloak.version=${{ matrix.kcVersion }} clean test
+          # Current Keycloak, Quarkus distribution, Jakarta EE 10 (jakarta.ws.rs,
+          # KeycloakSession-based SAMLEndpoint ctor). Built from src/main/java-jakarta.
+          - kcVersion: '25.0.6'
+            mavenProfile: 'jakarta'
 
-            -   name: Publish Test Report
-                uses: mikepenz/action-junit-report@v6
-                if: success() || failure()
-                with:
-                    summary: true
-                    detailed_summary: true
-                    annotate_notice: true
-                    truncate_stack_traces: false
-                    report_paths: '**/target/*-reports/TEST-*.xml'
+          - kcVersion: ${{ needs.vars.outputs.latest_keycloak_version }}
+            mavenProfile: 'jakarta'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-    end2end:
-        name: "Deploy smoke test on Keycloak ${{ matrix.kcVersion }}"
-        # Verifies the built jar still deploys cleanly and the server boots on a real legacy
-        # (WildFly-distribution) Keycloak per version. This is NOT a functional SAML login test
-        # against ELSTER — that would need a real/mock ELSTER IdP (metadata, signing certs,
-        # encrypted assertions) that isn't available in CI. See CustomSAMLEndpointTest for
-        # coverage of the actual SAML attribute-transform logic.
-        runs-on: ubuntu-latest
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    -   kcVersion: "15.1.1"
-                        image: "quay.io/keycloak/keycloak:15.1.1"
-                    -   kcVersion: "18.0.2"
-                        image: "quay.io/keycloak/keycloak:18.0.2-legacy"
-                    -   kcVersion: "19.0.3"
-                        image: "quay.io/keycloak/keycloak:19.0.3-legacy"
-        steps:
-            -   uses: actions/checkout@v7
-            -   name: Set up JDK 17
-                uses: actions/setup-java@v5
-                with:
-                    distribution: "temurin"
-                    java-version: "17"
+      - name: Cache .m2
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-            -   name: Cache .m2
-                uses: actions/cache@v6
-                with:
-                    path: ~/.m2/repository
-                    key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-                    restore-keys: |
-                        ${{ runner.os }}-maven-
+      - name: Build and test against Keycloak ${{ matrix.kcVersion }}
+        run: |
+          mvn ${MAVEN_CLI_OPTS} -P${{ matrix.mavenProfile }} -Dkeycloak.version=${{ matrix.kcVersion }} clean test
 
-            -   name: Build plugin jar for Keycloak ${{ matrix.kcVersion }}
-                run: |
-                    mvn ${MAVEN_CLI_OPTS} -Plegacy -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v6
+        if: success() || failure()
+        with:
+          summary: true
+          detailed_summary: true
+          annotate_notice: true
+          truncate_stack_traces: false
+          report_paths: '**/target/*-reports/TEST-*.xml'
 
-            -   name: Build smoke-test image with the plugin deployed
-                run: |
-                    cat <<'EOF' > Dockerfile.smoke-test
-                    ARG BASE_IMAGE
-                    FROM ${BASE_IMAGE}
-                    USER root
-                    # These images bundle whatever java-11-openjdk-headless build was current in
-                    # the UBI8 repos when they were published (2021/2022). Old JDK 11 builds hit
-                    # JDK-8287073 (NPE in CgroupV2Subsystem.getInstance) on cgroup-v2 hosts like
-                    # GitHub's ubuntu-latest runners; it's fixed in later 11.0.x builds. Pulling a
-                    # current build from UBI8's (still-served, no-subscription) repos avoids it.
-                    RUN microdnf update -y java-11-openjdk-headless && microdnf clean all
-                    USER 1000
-                    COPY --chown=1000:0 target/*.jar /opt/jboss/keycloak/standalone/deployments/
-                    EOF
-                    docker build \
-                        --build-arg BASE_IMAGE=${{ matrix.image }} \
-                        -f Dockerfile.smoke-test \
-                        -t elster-authenticator-smoke-test:${{ matrix.kcVersion }} .
+  end2end:
+    name: 'Deploy smoke test on Keycloak ${{ matrix.kcVersion }}'
+    # Verifies the built jar still deploys cleanly and the server boots on a real legacy
+    # (WildFly-distribution) Keycloak per version. This is NOT a functional SAML login test
+    # against ELSTER — that would need a real/mock ELSTER IdP (metadata, signing certs,
+    # encrypted assertions) that isn't available in CI. See CustomSAMLEndpointTest for
+    # coverage of the actual SAML attribute-transform logic.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kcVersion: '15.1.1'
+            image: 'quay.io/keycloak/keycloak:15.1.1'
+          - kcVersion: '18.0.2'
+            image: 'quay.io/keycloak/keycloak:18.0.2-legacy'
+          - kcVersion: '19.0.3'
+            image: 'quay.io/keycloak/keycloak:19.0.3-legacy'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-            -   name: Boot Keycloak with the plugin deployed
-                run: |
-                    docker run -d --name kc-smoke-test \
-                        -e KEYCLOAK_USER=admin -e KEYCLOAK_PASSWORD=admin \
-                        -p 8080:8080 \
-                        elster-authenticator-smoke-test:${{ matrix.kcVersion }}
+      - name: Cache .m2
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-            -   name: Wait for plugin deployment and server readiness
-                run: |
-                    echo "Waiting for the elster-authenticator module to deploy..."
-                    deployed=false
-                    for i in $(seq 1 60); do
-                        if docker logs kc-smoke-test 2>&1 | grep -qi 'deployed "elster-authenticator'; then
-                            deployed=true
-                            break
-                        fi
-                        sleep 5
-                    done
-                    if [ "$deployed" != "true" ]; then
-                        echo "::error::elster-authenticator did not report as deployed within timeout"
-                        docker logs kc-smoke-test
-                        exit 1
-                    fi
+      - name: Build plugin jar for Keycloak ${{ matrix.kcVersion }}
+        run: |
+          mvn ${MAVEN_CLI_OPTS} -Plegacy -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
 
-                    if docker logs kc-smoke-test 2>&1 | grep -i "elster" | grep -qi "error"; then
-                        echo "::error::Errors were logged while deploying elster-authenticator"
-                        docker logs kc-smoke-test
-                        exit 1
-                    fi
+      - name: Build smoke-test image with the plugin deployed
+        run: |
+          cat <<'EOF' > Dockerfile.smoke-test
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          USER root
+          # These images bundle whatever java-11-openjdk-headless build was current in
+          # the UBI8 repos when they were published (2021/2022). Old JDK 11 builds hit
+          # JDK-8287073 (NPE in CgroupV2Subsystem.getInstance) on cgroup-v2 hosts like
+          # GitHub's ubuntu-latest runners; it's fixed in later 11.0.x builds. Pulling a
+          # current build from UBI8's (still-served, no-subscription) repos avoids it.
+          RUN microdnf update -y java-11-openjdk-headless && microdnf clean all
+          USER 1000
+          COPY --chown=1000:0 target/*.jar /opt/jboss/keycloak/standalone/deployments/
+          EOF
+          docker build \
+              --build-arg BASE_IMAGE=${{ matrix.image }} \
+              -f Dockerfile.smoke-test \
+              -t elster-authenticator-smoke-test:${{ matrix.kcVersion }} .
 
-                    echo "Waiting for Keycloak to accept requests..."
-                    for i in $(seq 1 30); do
-                        if curl -sf http://localhost:8080/auth/realms/master/.well-known/openid-configuration > /dev/null; then
-                            echo "Keycloak is up with the plugin deployed."
-                            exit 0
-                        fi
-                        sleep 5
-                    done
-                    echo "::error::Keycloak did not become ready within timeout"
-                    docker logs kc-smoke-test
-                    exit 1
+      - name: Boot Keycloak with the plugin deployed
+        run: |
+          docker run -d --name kc-smoke-test \
+              -e KEYCLOAK_USER=admin -e KEYCLOAK_PASSWORD=admin \
+              -p 8080:8080 \
+              elster-authenticator-smoke-test:${{ matrix.kcVersion }}
 
-            -   name: Dump container logs
-                if: always()
-                run: docker logs kc-smoke-test || true
+      - name: Wait for plugin deployment and server readiness
+        run: |
+          echo "Waiting for the elster-authenticator module to deploy..."
+          deployed=false
+          for i in $(seq 1 60); do
+              if docker logs kc-smoke-test 2>&1 | grep -qi 'deployed "elster-authenticator'; then
+                  deployed=true
+                  break
+              fi
+              sleep 5
+          done
+          if [ "$deployed" != "true" ]; then
+              echo "::error::elster-authenticator did not report as deployed within timeout"
+              docker logs kc-smoke-test
+              exit 1
+          fi
 
-            -   name: Teardown
-                if: always()
-                run: docker rm -f kc-smoke-test || true
+          if docker logs kc-smoke-test 2>&1 | grep -i "elster" | grep -qi "error"; then
+              echo "::error::Errors were logged while deploying elster-authenticator"
+              docker logs kc-smoke-test
+              exit 1
+          fi
 
-    end2end-quarkus:
-        name: "Deploy smoke test on Keycloak ${{ matrix.kcVersion }} (Quarkus)"
-        # Same intent as the end2end job above, but current Keycloak deploys providers
-        # completely differently from the legacy WildFly distribution: no
-        # jboss-deployment-structure.xml / wildfly-maven-plugin, instead the jar goes into
-        # /opt/keycloak/providers/ and `kc.sh build` compiles it into an optimized image. That
-        # build step itself instantiates providers, so a broken provider fails the build, not
-        # just the boot - a stronger signal than log-polling.
-        runs-on: ubuntu-latest
-        strategy:
-            fail-fast: false
-            matrix:
-                kcVersion:
-                    - "26.7.1"
-        steps:
-            -   uses: actions/checkout@v7
-            -   name: Set up JDK 17
-                uses: actions/setup-java@v5
-                with:
-                    distribution: "temurin"
-                    java-version: "17"
+          echo "Waiting for Keycloak to accept requests..."
+          for i in $(seq 1 30); do
+              if curl -sf http://localhost:8080/auth/realms/master/.well-known/openid-configuration > /dev/null; then
+                  echo "Keycloak is up with the plugin deployed."
+                  exit 0
+              fi
+              sleep 5
+          done
+          echo "::error::Keycloak did not become ready within timeout"
+          docker logs kc-smoke-test
+          exit 1
 
-            -   name: Cache .m2
-                uses: actions/cache@v6
-                with:
-                    path: ~/.m2/repository
-                    key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-                    restore-keys: |
-                        ${{ runner.os }}-maven-
+      - name: Dump container logs
+        if: always()
+        run: docker logs kc-smoke-test || true
 
-            -   name: Build plugin jar for Keycloak ${{ matrix.kcVersion }}
-                run: |
-                    mvn ${MAVEN_CLI_OPTS} -Pjakarta -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
+      - name: Teardown
+        if: always()
+        run: docker rm -f kc-smoke-test || true
 
-            -   name: Build smoke-test image with the plugin deployed
-                run: |
-                    cat <<'EOF' > Dockerfile.smoke-test-quarkus
-                    ARG BASE_IMAGE
-                    FROM ${BASE_IMAGE}
-                    COPY target/*.jar /opt/keycloak/providers/
-                    RUN /opt/keycloak/bin/kc.sh build
-                    EOF
-                    docker build \
-                        --build-arg BASE_IMAGE=quay.io/keycloak/keycloak:${{ matrix.kcVersion }} \
-                        -f Dockerfile.smoke-test-quarkus \
-                        -t elster-authenticator-smoke-test-quarkus:${{ matrix.kcVersion }} .
+  end2end-quarkus:
+    name: 'Deploy smoke test on Keycloak ${{ matrix.kcVersion }} (Quarkus)'
+    # Same intent as the end2end job above, but current Keycloak deploys providers
+    # completely differently from the legacy WildFly distribution: no
+    # jboss-deployment-structure.xml / wildfly-maven-plugin, instead the jar goes into
+    # /opt/keycloak/providers/ and `kc.sh build` compiles it into an optimized image. That
+    # build step itself instantiates providers, so a broken provider fails the build, not
+    # just the boot - a stronger signal than log-polling.
+    needs: vars
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kcVersion:
+          - '25.0.6'
+          - ${{ needs.vars.outputs.latest_keycloak_version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-            -   name: Boot Keycloak with the plugin deployed
-                run: |
-                    docker run -d --name kc-smoke-test-quarkus \
-                        -p 8080:8080 \
-                        elster-authenticator-smoke-test-quarkus:${{ matrix.kcVersion }} \
-                        start-dev
+      - name: Cache .m2
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-            -   name: Wait for server readiness
-                run: |
-                    # No /auth prefix on current Keycloak (root context since the Quarkus
-                    # distribution). kc.sh build already validated the provider loads; this just
-                    # confirms the server actually comes up.
-                    for i in $(seq 1 30); do
-                        if curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration > /dev/null; then
-                            echo "Keycloak is up with the plugin deployed."
-                            exit 0
-                        fi
-                        sleep 5
-                    done
-                    echo "::error::Keycloak did not become ready within timeout"
-                    docker logs kc-smoke-test-quarkus
-                    exit 1
+      - name: Build plugin jar for Keycloak ${{ matrix.kcVersion }}
+        run: |
+          mvn ${MAVEN_CLI_OPTS} -Pjakarta -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
 
-            -   name: Dump container logs
-                if: always()
-                run: docker logs kc-smoke-test-quarkus || true
+      - name: Build smoke-test image with the plugin deployed
+        run: |
+          cat <<'EOF' > Dockerfile.smoke-test-quarkus
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          COPY target/*.jar /opt/keycloak/providers/
+          RUN /opt/keycloak/bin/kc.sh build
+          EOF
+          docker build \
+              --build-arg BASE_IMAGE=quay.io/keycloak/keycloak:${{ matrix.kcVersion }} \
+              -f Dockerfile.smoke-test-quarkus \
+              -t elster-authenticator-smoke-test-quarkus:${{ matrix.kcVersion }} .
 
-            -   name: Teardown
-                if: always()
-                run: docker rm -f kc-smoke-test-quarkus || true
+      - name: Boot Keycloak with the plugin deployed
+        run: |
+          docker run -d --name kc-smoke-test-quarkus \
+              -p 8080:8080 \
+              elster-authenticator-smoke-test-quarkus:${{ matrix.kcVersion }} \
+              start-dev
 
-    build-results:
-        name: Build results
-        if: ${{ always() }}
-        runs-on: ubuntu-latest
-        needs:
-            - build
-            - keycloak-version-matrix
-            - end2end
-            - end2end-quarkus
-        steps:
-            -   run: exit 1
-                # see https://stackoverflow.com/a/67532120/4907315
-                if: >-
-                    ${{
-                          contains(needs.*.result, 'failure')
-                      || contains(needs.*.result, 'cancelled')
-                          || contains(needs.*.result, 'skipped')
-                          }}
+      - name: Wait for server readiness
+        run: |
+          # No /auth prefix on current Keycloak (root context since the Quarkus
+          # distribution). kc.sh build already validated the provider loads; this just
+          # confirms the server actually comes up.
+          for i in $(seq 1 30); do
+              if curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration > /dev/null; then
+                  echo "Keycloak is up with the plugin deployed."
+                  exit 0
+              fi
+              sleep 5
+          done
+          echo "::error::Keycloak did not become ready within timeout"
+          docker logs kc-smoke-test-quarkus
+          exit 1
+
+      - name: Dump container logs
+        if: always()
+        run: docker logs kc-smoke-test-quarkus || true
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f kc-smoke-test-quarkus || true
+
+  build-results:
+    name: Build results
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs:
+      - vars
+      - build
+      - keycloak-version-matrix
+      - end2end
+      - end2end-quarkus
+    steps:
+      - run: exit 1
+        # see https://stackoverflow.com/a/67532120/4907315
+        if: >-
+          ${{
+                contains(needs.*.result, 'failure')
+            || contains(needs.*.result, 'cancelled')
+                || contains(needs.*.result, 'skipped')
+                }}
