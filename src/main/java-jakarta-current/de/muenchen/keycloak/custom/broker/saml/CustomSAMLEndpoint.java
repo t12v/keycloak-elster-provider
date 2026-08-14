@@ -1,7 +1,7 @@
 package de.muenchen.keycloak.custom.broker.saml;
 
 import org.jboss.logging.Logger;
-import org.keycloak.broker.provider.IdentityProvider;
+import org.keycloak.broker.provider.UserAuthenticationIdentityProvider;
 import org.keycloak.broker.saml.SAMLEndpoint;
 import org.keycloak.broker.saml.SAMLIdentityProvider;
 import org.keycloak.broker.saml.SAMLIdentityProviderConfig;
@@ -50,14 +50,10 @@ import java.util.Collections;
 import java.util.Iterator;
 
 /**
- * jakarta.ws.rs era, Keycloak 22.0.5 through 25.x - after the javax.ws.rs -> jakarta.ws.rs
- * rename (22.0.0) but before SAMLEndpoint.postBinding()/execute() gained the samlArt parameter
- * (26.0.0). See src/main/java-jakarta-current for the later shape (also AuthenticationCallback
- * moved to UserAuthenticationIdentityProvider at 26.5.0, and session became protected at
- * 26.6.0) - a single source file can't satisfy both the 4-arg and 5-arg execute() overloads.
- * Note: Keycloak 26.0.0-26.4.x lands between these two variants (5-arg execute, but still
- * IdentityProvider.AuthenticationCallback + private session) and isn't covered by either; not
- * currently in the CI matrix. See CLAUDE.md.
+ * jakarta.ws.rs era, Keycloak >= 26.5.0 (UserAuthenticationIdentityProvider.AuthenticationCallback
+ * exists from here on). See src/main/java-jakarta for the 22.0.5-25.x shape (4-arg execute,
+ * IdentityProvider.AuthenticationCallback) - a single source file can't satisfy both the 4-arg
+ * and 5-arg execute() overloads. See CLAUDE.md.
  */
 public class CustomSAMLEndpoint extends SAMLEndpoint {
     protected static final Logger logger = Logger.getLogger(CustomSAMLEndpoint.class);
@@ -65,11 +61,12 @@ public class CustomSAMLEndpoint extends SAMLEndpoint {
     public static final String EKONA = "ekona:";
     public static final String XSD_STRING = "xsd:string";
 
-    public CustomSAMLEndpoint(KeycloakSession session, SAMLIdentityProvider provider, SAMLIdentityProviderConfig config, IdentityProvider.AuthenticationCallback callback, DestinationValidator destinationValidator) {
+    public CustomSAMLEndpoint(KeycloakSession session, SAMLIdentityProvider provider, SAMLIdentityProviderConfig config, UserAuthenticationIdentityProvider.AuthenticationCallback callback, DestinationValidator destinationValidator) {
         super(session, provider, config, callback, destinationValidator);
     }
 
-    //Eigenes Feld, weil SAMLEndpoint.session in dieser Version private ist.
+    //Eigenes Feld statt sich auf die Sichtbarkeit von SAMLEndpoint.session zu verlassen - die
+    //hat sich zwischen Keycloak-Versionen schon mehrfach geändert (private/protected).
     @Context
     private KeycloakSession session;
 
@@ -358,7 +355,8 @@ public class CustomSAMLEndpoint extends SAMLEndpoint {
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     public Response postBinding(@FormParam(GeneralConstants.SAML_REQUEST_KEY) String samlRequest,
                                 @FormParam(GeneralConstants.SAML_RESPONSE_KEY) String samlResponse,
+                                @FormParam(GeneralConstants.SAML_ARTIFACT_KEY) String samlArt,
                                 @FormParam(GeneralConstants.RELAY_STATE) String relayState) {
-        return new CustomSAMLEndpoint.PostBinding().execute(samlRequest, samlResponse, relayState, null);
+        return new CustomSAMLEndpoint.PostBinding().execute(samlRequest, samlResponse, samlArt, relayState, null);
     }
 }

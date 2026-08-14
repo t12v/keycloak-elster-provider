@@ -101,13 +101,18 @@ jobs:
           - kcVersion: '19.0.3'
             mavenProfile: 'legacy'
 
-          # Current Keycloak, Quarkus distribution, Jakarta EE 10 (jakarta.ws.rs,
-          # KeycloakSession-based SAMLEndpoint ctor). Built from src/main/java-jakarta.
+          # Jakarta EE 10 (jakarta.ws.rs), Keycloak 22.0.5-25.x, before SAMLEndpoint's
+          # postBinding()/execute() gained the samlArt parameter (26.0.0). Built from
+          # src/main/java-jakarta.
           - kcVersion: '25.0.6'
             mavenProfile: 'jakarta'
 
+          # Current Keycloak (>= 26.5.0): AuthenticationCallback moved to
+          # UserAuthenticationIdentityProvider, session became protected. Built from
+          # src/main/java-jakarta-current. See pom.xml/CLAUDE.md for the full API diff
+          # timeline and the 26.0.0-26.4.x gap between the two jakarta variants.
           - kcVersion: ${{ needs.vars.outputs.latest_keycloak_version }}
-            mavenProfile: 'jakarta'
+            mavenProfile: 'jakarta-current'
     steps:
       - uses: actions/checkout@v7
       - name: Set up JDK 17
@@ -259,9 +264,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kcVersion:
-          - '25.0.6'
-          - ${{ needs.vars.outputs.latest_keycloak_version }}
+        include:
+          - kcVersion: '25.0.6'
+            mavenProfile: 'jakarta'
+          - kcVersion: ${{ needs.vars.outputs.latest_keycloak_version }}
+            mavenProfile: 'jakarta-current'
     steps:
       - uses: actions/checkout@v7
       - name: Set up JDK 17
@@ -280,7 +287,7 @@ jobs:
 
       - name: Build plugin jar for Keycloak ${{ matrix.kcVersion }}
         run: |
-          mvn ${MAVEN_CLI_OPTS} -Pjakarta -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
+          mvn ${MAVEN_CLI_OPTS} -P${{ matrix.mavenProfile }} -Dkeycloak.version=${{ matrix.kcVersion }} clean package -DskipTests
 
       - name: Build smoke-test image with the plugin deployed
         run: |
